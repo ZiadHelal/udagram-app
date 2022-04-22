@@ -1,0 +1,137 @@
+Description: >
+    Ziad Helal
+
+    This code deploys a VPC, a pair of public and private subnets spread 
+    across two Availabilty Zones with an Internet Gateway, 
+    and deploys a pair of NAT Gateways (one in each AZ).
+
+
+Parameters:
+
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+
+  VPCCIDR:
+    Description: IP range for Environment's VPC
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnet1CIDR:
+    Description: IP range for public subnet in Availability Zone A
+    Type: String
+    Default: 10.0.0.0/24
+
+  PublicSubnet2CIDR:
+    Description: IP range for public subnet in Availability Zone B
+    Type: String
+    Default: 10.0.0.0/24
+
+  PrivateSubnet1CIDR:
+    Description: IP range for public subnet in Availability Zone A
+    Type: String
+    Default: 10.0.0.0/24
+
+  PrivateSubnet2CIDR:
+    Description: IP range for private subnet in Availability Zone B
+    Type: String
+    Default: 10.0.0.0/24
+
+
+Resources:
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsHostnames: 'true'
+      Tags:
+       - Key: Name
+         Value: !Ref EnvironmentName
+  
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+       - Key: Name
+         Value: !Ref EnvironmentName
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: 'true'
+      Tags:
+       - Key: Name
+         Value: !Sub ${EnvironmentName}'s Public Subnet (AZ-A)
+      VpcId: !Ref VPC
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: 'true'
+      Tags:
+       - Key: Name
+         Value: !Sub ${EnvironmentName}'s Public Subnet (AZ-B)
+      VpcId: !Ref VPC
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: 'false'
+      Tags:
+       - Key: Name
+         Value: !Sub ${EnvironmentName}'s Private Subnet (AZ-A)
+      VpcId: !Ref VPC
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: 'false'
+      Tags:
+       - Key: Name
+         Value: !Sub ${EnvironmentName}'s Private Subnet (AZ-B)
+      VpcId: !Ref VPC
+
+  ElasticIPAddress1:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  ElasticIPAddress2:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NATGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIPAddress1.AllocationId
+      SubnetId: !Ref PublicSubnet1
+    Tags:
+     - Key: Name
+       Value: !Sub ${EnvironmentName}'s NAT gateway 1
+
+  NATGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIPAddress2.AllocationId
+      SubnetId: !Ref PublicSubnet2
+    Tags:
+     - Key: Name
+       Value: !Sub ${EnvironmentName}'s NAT gateway 2
