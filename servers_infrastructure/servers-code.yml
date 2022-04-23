@@ -1,0 +1,145 @@
+Description: >
+    Ziad Helal
+
+    This code deploys an autoscaling group across two AZs to ensure high availability 
+    and failure resistance along with its security group, launch group configuration, 
+    and a load balancer for disrtibuting the load.
+
+
+Parameters:
+
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+
+  ParameterAmiID:
+    Description: AMI ID SSM Parameter for Image ID for the launch configuration
+    Default: AMIID
+    Type: AWS::SSM::Parameter::Value<String>
+
+  
+Resources:
+
+  WebServerSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to the web servers
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  LoadBalancerSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to the load balancer
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+  
+  AutoScalingGroupLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          sudo apt-get install apache2 -y
+          sudo systemctl start apache2.service
+      ImageId: !Ref ParameterAmiID
+      SecurityGroups:
+        - Ref: WebServerSecGroup
+      InstanceType: t3.medium
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: '10'
+
+  AppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - Fn::ImportValue:
+            !Sub "${EnvironmentName}-PRIV-NETS"
+      LaunchConfigurationName: 
+        Ref: AutoScalingGroupLaunchConfig
+      MinSize: '4'
+      MaxSize: '6'
+      TargetGroupARNs:
+        - Ref: AppTargetGroup
+  
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub: "${EnvironmentName}-VPCID"
+
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PUB1-SN"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PUB2-SN"
+      SecurityGroups:
+        - Ref: LoadBalancerSecGroup
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: AppTargetGroup
+      LoadBalancerArn:
+        Ref: AppLoadBalancer
+      Port: '80'
+      Protocol: HTTP
+
+  LoadBalancerListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref 'AppTargetGroup'
+      Conditions:
+      - Field: path-pattern
+        Values: [/]
+      ListenerArn: !Ref 'Listener'
+      Priority: 1
+
+
+Outputs:
+
+  AppURL:
+    Description: Load Balancer URL to which we have access to our App
+    Value: !Join ["://", ["http", !GetAtt AppLoadBalancer.DNSName]]
+    Export:
+      Name: !Sub ${EnvironmentName}-URL
