@@ -1,9 +1,10 @@
 Description: >
     Ziad Helal
 
-    This code deploys an autoscaling group across two AZs to ensure high availability 
-    and failure resistance along with its security group, launch group configuration, 
-    and a load balancer for disrtibuting the load.
+    This code deploys an autoscaling group across two AZs to ensure high availability
+    and failure resistance along with its security group and the IAM Profile for downloading
+    App files from S3 Bucket, launch group configuration, and a load balancer for disrtibuting the load.
+    The autoscaling group also has CloudWatch Metrics to monitor its preformance.
 
 
 Parameters:
@@ -55,6 +56,43 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
+
+  S3ReadOnlyRole: 
+    Type: "AWS::IAM::Role"
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "ec2.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Path: "/"
+
+  S3ReadAccessPolicy: 
+    Type: "AWS::IAM::Policy"
+    Properties: 
+      PolicyName: "S3ReadAccessPolicy"
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Action: 
+              - 's3:Get*'
+              - 's3:List*'
+            Resource: "*"
+      Roles: 
+        - Ref: "S3ReadOnlyRole"
+
+  AutoScalingS3AccessProfile: 
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: "/"
+      Roles: 
+        - Ref: "S3ReadOnlyRole"
   
   AutoScalingGroupLaunchConfig:
     Type: AWS::AutoScaling::LaunchConfiguration
@@ -62,12 +100,19 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          apt-get update -y
+          sudo apt-get update -y
           sudo apt-get install apache2 -y
+          sudo apt install awscli -y
+          sudo apt-get install unzip
+          cd /var/www/html
+          sudo aws s3 cp s3://udagram-app-files/udagram-starter-website.zip .
+          sudo unzip -o udagram-starter-website.zip
+          sudo rm -rf udagram-starter-website.zip
           sudo systemctl start apache2.service
       ImageId: !Ref ParameterAmiID
       SecurityGroups:
         - Ref: WebServerSecGroup
+      IamInstanceProfile: !Ref AutoScalingS3AccessProfile
       InstanceType: t3.medium
       BlockDeviceMappings:
         - DeviceName: "/dev/sdk"
@@ -84,6 +129,12 @@ Resources:
         Ref: AutoScalingGroupLaunchConfig
       MinSize: '4'
       MaxSize: '6'
+      MetricsCollection:            # CloudWatch Metrics for monitoring
+        - Granularity: "1Minute"
+          Metrics:
+            - "GroupMinSize"
+            - "GroupMaxSize"
+            - "GroupStandbyInstances"
       TargetGroupARNs:
         - Ref: AppTargetGroup
   
